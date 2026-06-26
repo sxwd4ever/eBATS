@@ -90,7 +90,7 @@ def cal_energy_balance(T_dist, args):
         
     T_cool_pre = args.get("T_cool_pre")
     T_bat_pre = args.get("T_bat_pre")
-    u_cool = args.get("u_cool")
+    u_cool_in = args.get("u_cool_in")
     p_cool = args.get("p_cool")
     fluid_cool = args.get("fluid_cool")
     A_battery = args.get("A_battery")
@@ -120,29 +120,28 @@ def cal_energy_balance(T_dist, args):
 
         T_cool_seg_in = T_cool_in if i == 0 else T_cool[i-1]  # inlet coolant temperature for this segment
         T_cool_seg_out = T_cool[i]  # outlet coolant temperature for this segment
-        T_cool_bar = (T_cool_seg_in + T_cool[i]) / 2  # average coolant temperature for this segment        
+        T_cool_bar = (T_cool_seg_in + T_cool_seg_out) / 2  # average coolant temperature for this segment        
         # T_cool_bar = T_cool_seg_in 
         # convective heat transfer on the cooling side
         if not is_cool:
             Q_cool_HT[i] = 0
           
         else:    
-            Q_cool_HT[i] = htc_cool * A_battery * (T_bat[i] - T_cool_bar)  # use the average temperature between the current and inlet coolant temperature for heat transfer calculation
+            Q_cool_HT[i] = htc_cool[i] * A_battery * (T_bat[i] - T_cool_bar)  # use the average temperature between the current and inlet coolant temperature for heat transfer calculation
 
         dT_bat = T_bat[i] - T_bat_pre[i]  # change in battery temperature 
         
         if debug:
             print(f"Segment {i}: Q_gen = {Q_gen}, Q_cool_HT = {Q_cool_HT}, dT_bat = {dT_bat}; T_bat_cur = {T_bat}, T_cool_bar = {T_cool_bar}")  # debug print for power generation, cooling power, and battery temperature change for this segment
 
-        Q_bat[i] = dT_bat * m_bat * cp_bat / dt  # heat input rate related to temperature change
-        
+        Q_bat[i] = dT_bat * m_bat * cp_bat / dt  # heat input rate related to temperature change        
           
-        Q_cool_change[i] = u_cool * A_cool * rho_cool * cp_cool * (T_cool[i] - T_cool_seg_in)  # calculate the power transfer to the coolant based on the current guess of the coolant temperature distribution for this segment, using a constant specific heat capacity and temperature change for the coolant for simplicity; adjust as needed
+        Q_cool_change[i] = u_cool_in * A_cool * rho_cool * cp_cool * (T_cool[i] - T_cool_seg_in)  # calculate the power transfer to the coolant based on the current guess of the coolant temperature distribution for this segment, using a constant specific heat capacity and temperature change for the coolant for simplicity; adjust as needed
         
         # # detemrine the power transfer based on the change in enthalpy of the coolant across this segment; This calculation is more accurate but more computationally expensive than using a constant specific heat capacity and temperature change for the coolant; adjust as needed
         # h_cool_in = CP.PropsSI('H', 'T', T_cool_seg_in+273.15, 'P', p_cool, fluid_cool)  # enthalpy of the coolant at the inlet temperature for this segment
         # h_cool_out = CP.PropsSI('H', 'T', T_cool[i]+273.15, 'P', p_cool, fluid_cool)  # enthalpy of the coolant at the outlet temperature for this segment
-        # Q_cool_change = u_cool * A_cool * rho_cool * (h_cool_out - h_cool_in)  # calculate the power transfer to the coolant based on the change in enthalpy of the coolant across this segment
+        # Q_cool_change = u_cool_in * A_cool * rho_cool * (h_cool_out - h_cool_in)  # calculate the power transfer to the coolant based on the change in enthalpy of the coolant across this segment
         
                 
         # calculate the residual between the input power and the power received by the coolant    
