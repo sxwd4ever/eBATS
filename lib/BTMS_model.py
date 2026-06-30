@@ -93,7 +93,7 @@ def cal_energy_balance(T_dist, args):
     u_cool_in = args.get("u_cool_in")
     p_cool = args.get("p_cool")
     fluid_cool = args.get("fluid_cool")
-    A_battery = args.get("A_battery")
+    A_HT_seg = args.get("A_HT_seg") # heat transfer area for each segment
     A_cool = args.get("A_cool")
     m_bat = args.get("m_bat")
     cp_bat = args.get("cp_bat")
@@ -127,7 +127,7 @@ def cal_energy_balance(T_dist, args):
             Q_cool_HT[i] = 0
           
         else:    
-            Q_cool_HT[i] = htc_cool[i] * A_battery * (T_bat[i] - T_cool_bar)  # use the average temperature between the current and inlet coolant temperature for heat transfer calculation
+            Q_cool_HT[i] = htc_cool[i] * A_HT_seg * (T_bat[i] - T_cool_bar)  # use the average temperature between the current and inlet coolant temperature for heat transfer calculation
 
         dT_bat = T_bat[i] - T_bat_pre[i]  # change in battery temperature 
         
@@ -154,44 +154,72 @@ def cal_power_residual(T_dist, args):
     num_seg = args.get("num_seg")
     Q_gen = args.get("Q_gen") * np.ones(num_seg) # assuming constant power generation for simplicity; adjust as needed
     
-    residual = np.zeros(num_seg)  # initialize residual array for each segment
+    res_bat = Q_gen - Q_bat - Q_cool_HT
+
+    # Coolant energy balance residual:
+    # Q_cool_HT = Q_cool_change
+    res_cool = Q_cool_HT - Q_cool_change
     
-    res_bat = abs(Q_gen - Q_bat - Q_cool_HT) # residual for the battery energy balance, should be close to zero when the battery temperature distribution is correct        
-    
-    res_cool = abs(Q_cool_HT - Q_cool_change) # residual for the coolant energy balance, should be close to zero when the coolant temperature distribution is correct
-    
-    residual = res_bat**2 + res_cool**2 # should be close to zero when the coolant temperature distribution is correct
-    return residual
+    # residual = np.zeros(num_seg)
+    # residual = res_bat**2 + res_cool**2
+
+    # Return raw residuals. least_squares will square them internally.
+    return np.concatenate((res_bat, res_cool))
 
 def solve_coolant_temperature_distribution(args, tol=1e-6, maxiter=1000, debug=False):
     
     T_bat_pre = args.get("T_bat_pre")
     num_seg = len(T_bat_pre)    
     T_cool_in = args.get("T_cool_in")
-    T_cool_out = args.get("T_cool_out") # expected outlet coolant temperature
+    is_cool = args.get("is_cool")
+    Q_gen = args.get("Q_gen")
+    dt = args.get("dt")
+    m_bat = args.get("m_bat")
+    cp_bat = args.get("cp_bat") 
 
-    T_cool = np.linspace(T_cool_in, T_cool_out, num_seg+1)[1:]  # initial guess for coolant temperature distribution (linear from inlet to outlet temperature)
+    # Non-cooling period:
+    # Do not solve coolant temperature distribution with least_squares.
+    # Coolant temperature remains equal to inlet air temperature.
+    # Battery temperature is updated only by internal heat generation.
+    if not is_cool:
+        T_cool = np.ones(num_seg) * T_cool_in
+        T_bat = T_bat_pre + Q_gen * dt / (m_bat * cp_bat)
+        return np.concatenate((T_cool, T_bat))
     
-    T_bat = copy.deepcopy(T_bat_pre)  # use the previous battery temperature distribution as the initial guess for the battery temperature distribution in the optimization solver, this will be updated in each iteration of the optimization solver based on the current guess of the coolant temperature distribution
+    T_cool_out = args.get("T_cool_out") # expected outlet coolant temperature
+    T_cool_pre = args.get("T_cool_pre")
+
+    # Use previous time-step coolant temperature as the initial guess.
+    # If it is unavailable or invalid, fall back to the original linear guess.
+    if T_cool_pre is not None and np.all(np.isfinite(T_cool_pre)):
+        T_cool = copy.deepcopy(T_cool_pre)
+    else:
+        T_cool = np.linspace(T_cool_in, T_cool_out, num_seg + 1)[1:]
+
+    # Keep the initial guess within the lower bound.
+    T_cool = np.maximum(T_cool, T_cool_in + 1e-8)
+
+    # Use previous battery temperature as the initial guess.
+    T_bat = copy.deepcopy(T_bat_pre)
+
+    T_dist = np.concatenate((T_cool, T_bat))
     
-    T_dist = np.concatenate((T_cool, T_bat))  # combine coolant and battery temperature distributions into a single array for the optimization solver
-    
-    print(f"Initial guess for {len(T_cool)} coolant temperatures along the flow path: {T_cool}")  # debug print for the initial guess of the coolant temperature distribution
-    
-    # T_cool_init = np.insert(T_cool_init, 0, T_cool_in)  # insert inlet temperature at the beginning of the coolant temperature array
+    if debug:
+        print(f"Initial guess for {len(T_cool)} coolant temperatures along the flow path: {T_cool}")
 
     num_solutions = len(T_dist)
-    upper_bound = np.ones(num_solutions) * (T_cool_in + 300) # set an upper bound for the coolant temperature distribution for the optimization solver, adjust as needed
-    
-    lower_bound = np.ones(num_solutions) * T_cool_in # set a lower bound for the coolant temperature distribution for the optimization solver, adjust as needed
+
+    upper_bound = np.ones(num_solutions) * (T_cool_in + 300)
+    lower_bound = np.ones(num_solutions) * T_cool_in
     
     res = opt.least_squares(        
         cal_power_residual, 
         T_dist, 
         args=([args]), 
         method ='trf', 
-        verbose=2,
-        ftol=tol, max_nfev=maxiter,
+        verbose=2 if debug else 0,
+        ftol=tol, 
+        max_nfev=maxiter,
         bounds=(lower_bound, upper_bound)
     )
     
