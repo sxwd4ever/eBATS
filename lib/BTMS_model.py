@@ -162,33 +162,42 @@ def cal_energy_balance(T_dist, args):
         Qdot_cool_HT_seg = 0 # heat transfer for this segment
         Qdot_cool_change_seg = 0 # change of heat capacity for this segment of the coolant
         i_cool_seg = cell_to_cool_map[i] if cell_to_cool_map is not None else (i,) # Default coolant segment, one-to-one mapping
-
+        
+        T_seg = []  # store the coolant temperatures for this battery segment
+        A_HT_seg_all = [] 
+        
         for seg in i_cool_seg:
+            
             if not seg: pass # skip if no corresponding coolant segment for this battery segment
             
             T_cool_seg_in = T_cool_in if seg == 0 else T_cool[seg-1]  # inlet coolant temperature for this segment
             T_cool_seg_out = T_cool[seg]  # outlet coolant temperature for this segment
-     
+            
             if upwind_scheme:
                 T_cool_bar = T_cool_seg_in 
+                T_seg.append(T_cool_seg_in)
             else:
                 T_cool_bar = (T_cool_seg_in + T_cool_seg_out) / 2
-                
-            # convective heat transfer on the cooling side
-            if not is_cool:
-                Qdot_cool_HT_seg = 0
-            else:    
-                if debug and T_bat[i] < T_cool_bar:
-                    print(f"Segment {i}: T_bat = {T_bat[i]}, T_cool_bar = {T_cool_bar}, cooling skipped because T_bat <= T_cool_bar")
-                # Q_cool_HT_seg = 0
-                Qdot_cool_HT_seg += htc_cool[i] * A_HT_seg * (T_bat[i] - T_cool_bar)  # use the average temperature between the current and inlet coolant temperature for heat transfer calculation
+                T_seg.append(T_cool_seg_in)
+                T_seg.append(T_cool_seg_out)
             
-            
-            if(debug):
-                print(f"u_cool_in = {u_cool_in}, A_cool_cs = {A_cool_cs}, rho_cool = {rho_cool}, cp_cool = {cp_cool}, T_cool_seg_out = {T_cool_seg_out}, T_cool_seg_in = {T_cool_seg_in}")
-                print(f"Qdot_cool_HT_seg = {Qdot_cool_HT_seg}, Qdot_cool_change_seg = {Qdot_cool_change_seg}")
-                
+            A_HT_seg_all.append(A_HT_seg)     
+                  
             Qdot_cool_change_seg += u_cool_in * A_cool_cs * rho_cool * cp_cool * (T_cool_seg_out - T_cool_seg_in) # heat added to or removed from the coolant for this segment
+  
+        # convective heat transfer on the cooling side
+        if not is_cool:
+            Qdot_cool_HT_seg = 0
+        else:    
+            if debug and T_bat[i] < T_cool_bar:
+                print(f"Segment {i}: T_bat = {T_bat[i]}, T_cool_bar = {T_cool_bar}, cooling skipped because T_bat <= T_cool_bar")
+            # Q_cool_HT_seg = 0
+            Qdot_cool_HT_seg = htc_cool[i] * sum(A_HT_seg_all) * (T_bat[i] - np.mean(T_seg))  # use the average temperature between the current and inlet coolant temperature for heat transfer calculation
+        
+        
+        if(debug):
+            print(f"u_cool_in = {u_cool_in}, A_cool_cs = {A_cool_cs}, rho_cool = {rho_cool}, cp_cool = {cp_cool}, T_cool_seg_out = {T_cool_seg_out}, T_cool_seg_in = {T_cool_seg_in}")
+            print(f"Qdot_cool_HT_seg = {Qdot_cool_HT_seg}, Qdot_cool_change_seg = {Qdot_cool_change_seg}")
             
         dT_bat = T_bat[i] - T_bat_pre[i]  # change in battery temperature 
         
