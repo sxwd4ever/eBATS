@@ -144,7 +144,7 @@ def cal_energy_balance(T_dist, args):
     rho_cool = args.get("rho_cool") # use constant density for simplicity; adjust as needed
     Q_gen = args.get("Q_gen")
     cell_to_cool_map = args.get("cell_to_cool_map")
-    num_cell_seg = args.get("num_cell_seg", 1.0)  # number of cells in one domain (control volume) for scaling the heat transfer rates and battery mass; default is 1.0 if not provided
+    num_cell_seg = args.get("num_cell_seg", 1.0)   
     debug = args.get("debug", False)
     upwind_scheme = args.get("upwind_scheme", False)
     
@@ -162,7 +162,11 @@ def cal_energy_balance(T_dist, args):
 
         Qdot_cool_HT_seg = 0 # heat transfer for this segment
         Qdot_cool_change_seg = 0 # change of heat capacity for this segment of the coolant
-        i_cool_seg = (i, ) if cell_to_cool_map is None else cell_to_cool_map[i]  # get the corresponding coolant segment(s) for this battery segment
+        if cell_to_cool_map is None:
+            i_cool_seg = (i,)
+
+        else:
+            i_cool_seg = cell_to_cool_map[i]
 
         T_seg = []  # store the coolant temperatures for this battery segment
         A_HT_seg_all = [] 
@@ -193,7 +197,8 @@ def cal_energy_balance(T_dist, args):
             if debug and T_bat[i] < T_cool_bar:
                 print(f"Segment {i}: T_bat = {T_bat[i]}, T_cool_bar = {T_cool_bar}, cooling skipped because T_bat <= T_cool_bar")
             # Q_cool_HT_seg = 0
-            Qdot_cool_HT_seg = htc_cool[i] * sum(A_HT_seg_all) * (T_bat[i] - np.mean(T_seg))  # use the average temperature between the current and inlet coolant temperature for heat transfer calculation        
+            Qdot_cool_HT_seg = htc_cool[i] * sum(A_HT_seg_all) * (T_bat[i] - np.mean(T_seg))  # use the average temperature between the current and inlet coolant temperature for heat transfer calculation
+        
         
         if(debug):
             print(f"u_cool_in = {u_cool_in}, A_cool_cs = {A_cool_cs}, rho_cool = {rho_cool}, cp_cool = {cp_cool}, T_cool_seg_out = {T_cool_seg_out}, T_cool_seg_in = {T_cool_seg_in}")
@@ -217,7 +222,9 @@ def cal_power_residual(T_dist, args):
     num_seg = args.get("num_seg")
     num_cell_seg = args.get("num_cell_seg", 1.0)
     
+
     Q_gen = args.get("Q_gen") * num_cell_seg * np.ones(num_seg) # assuming constant power generation for simplicity; adjust as needed
+
     
     res_bat = Q_gen - Q_bat - Q_cool_HT
 
@@ -226,13 +233,13 @@ def cal_power_residual(T_dist, args):
     res_cool = Q_cool_HT - Q_cool_change
     
     # residual = np.zeros(num_seg)
-    residual = res_bat**2 + res_cool**2 
+    # residual = res_bat**2 + res_cool**2 
     # The solver is too stiff. It is better to replace it with the one below
-    return residual
+    # return residual
     
     
     # Return raw residuals. least_squares will square them internally.
-    # return np.concatenate((res_bat, res_cool))
+    return np.concatenate((res_bat, res_cool))
 
 def solve_coolant_temperature_distribution(args, tol=1e-6, maxiter=1000, debug=False):
     
@@ -430,8 +437,7 @@ def cal_btms_mass(args):
         A_HT_seg = float(args["A_HT_seg"])
         num_seg = int(args["num_seg"])
 
-        # Scaling factor
-        cell_domain_factor = float(args["cell_domain_factor"])
+
 
         # Cold plate properties
         rho_plate = float(args["rho_plate"])
@@ -444,7 +450,7 @@ def cal_btms_mass(args):
 
         # Cold plate mass
         A_plate = (
-            A_HT_seg* num_seg* cell_domain_factor
+            A_HT_seg* num_seg
         )
 
         m_plate = (
