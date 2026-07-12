@@ -144,6 +144,7 @@ def cal_energy_balance(T_dist, args):
     rho_cool = args.get("rho_cool") # use constant density for simplicity; adjust as needed
     Q_gen = args.get("Q_gen")
     cell_to_cool_map = args.get("cell_to_cool_map")
+    num_cell_seg = args.get("num_cell_seg", 1.0)  # number of cells in one domain (control volume) for scaling the heat transfer rates and battery mass; default is 1.0 if not provided
     debug = args.get("debug", False)
     upwind_scheme = args.get("upwind_scheme", False)
     
@@ -161,8 +162,8 @@ def cal_energy_balance(T_dist, args):
 
         Qdot_cool_HT_seg = 0 # heat transfer for this segment
         Qdot_cool_change_seg = 0 # change of heat capacity for this segment of the coolant
-        i_cool_seg = cell_to_cool_map[i] if cell_to_cool_map is not None else (i,) # Default coolant segment, one-to-one mapping
-        
+        i_cool_seg = (i, ) if cell_to_cool_map is None else cell_to_cool_map[i]  # get the corresponding coolant segment(s) for this battery segment
+
         T_seg = []  # store the coolant temperatures for this battery segment
         A_HT_seg_all = [] 
         
@@ -192,8 +193,7 @@ def cal_energy_balance(T_dist, args):
             if debug and T_bat[i] < T_cool_bar:
                 print(f"Segment {i}: T_bat = {T_bat[i]}, T_cool_bar = {T_cool_bar}, cooling skipped because T_bat <= T_cool_bar")
             # Q_cool_HT_seg = 0
-            Qdot_cool_HT_seg = htc_cool[i] * sum(A_HT_seg_all) * (T_bat[i] - np.mean(T_seg))  # use the average temperature between the current and inlet coolant temperature for heat transfer calculation
-        
+            Qdot_cool_HT_seg = htc_cool[i] * sum(A_HT_seg_all) * (T_bat[i] - np.mean(T_seg))  # use the average temperature between the current and inlet coolant temperature for heat transfer calculation        
         
         if(debug):
             print(f"u_cool_in = {u_cool_in}, A_cool_cs = {A_cool_cs}, rho_cool = {rho_cool}, cp_cool = {cp_cool}, T_cool_seg_out = {T_cool_seg_out}, T_cool_seg_in = {T_cool_seg_in}")
@@ -206,15 +206,18 @@ def cal_energy_balance(T_dist, args):
 
         Q_cool_HT[i] = Qdot_cool_HT_seg * dt  # store the calculated convective heat transfer for this segment
         Q_cool_change[i] = Qdot_cool_change_seg * dt  # 
-        Q_bat[i] = m_bat * cp_bat * dT_bat
+        Q_bat[i] = m_bat * num_cell_seg * cp_bat * dT_bat
         
     return Q_cool_HT, Q_cool_change, Q_bat
 
 def cal_power_residual(T_dist, args):
     
     Q_cool_HT, Q_cool_change, Q_bat = cal_energy_balance(T_dist, args)
+
     num_seg = args.get("num_seg")
-    Q_gen = args.get("Q_gen") * np.ones(num_seg) # assuming constant power generation for simplicity; adjust as needed
+    num_cell_seg = args.get("num_cell_seg", 1.0)
+    
+    Q_gen = args.get("Q_gen") * num_cell_seg * np.ones(num_seg) # assuming constant power generation for simplicity; adjust as needed
     
     res_bat = Q_gen - Q_bat - Q_cool_HT
 
@@ -223,8 +226,10 @@ def cal_power_residual(T_dist, args):
     res_cool = Q_cool_HT - Q_cool_change
     
     # residual = np.zeros(num_seg)
-    residual = res_bat**2 + res_cool**2
+    residual = res_bat**2 + res_cool**2 
+    # The solver is too stiff. It is better to replace it with the one below
     return residual
+    
     
     # Return raw residuals. least_squares will square them internally.
     # return np.concatenate((res_bat, res_cool))
@@ -295,3 +300,176 @@ def solve_coolant_temperature_distribution(args, tol=1e-6, maxiter=1000, debug=F
         print("Optimized coolant temperatures:", res.x)
     
     return res.x
+
+
+
+
+# =============================================================================
+# Auxiliary power and BTMS mass estimation
+# =============================================================================
+# Note:
+# The auxiliary power and BTMS mass calculated here are for a single
+# representative cooling channel/domain only.
+# Full-module scaling is not included in these functions.
+# =============================================================================
+# Calculate the Darcy friction factor based on the Reynolds number. 
+def cal_friction_factor(Re):
+    Re = float(Re)
+
+    if Re <= 0:
+        raise ValueError("Re must be positive for friction-factor calculation.")
+
+    if Re < 2300.0:
+        return 64.0 / Re
+
+    if Re >= 4000.0:
+        return 0.3164 * Re ** (-0.25)
+
+    f_laminar = 64.0 / 2300.0
+    f_turbulent = 0.3164 * 4000.0 ** (-0.25)
+    weight = (Re - 2300.0) / (4000.0 - 2300.0)
+
+    return f_laminar + weight * (f_turbulent - f_laminar)
+
+# Calculate BTMS auxiliary power and energy consumption.
+# Water cooling: pump power
+# Air cooling: fan power
+def cal_btms_aux_power(args):
+
+    fluid_cool = str(args["fluid_cool"]).lower()
+
+    operation_time = float(args.get("operation_time", 0.0))
+    K_minor = float(args.get("K_minor", 0.0))
+
+
+    if fluid_cool == "water":
+
+        rho = float(args["rho_cool"])
+        mu = float(args["mu_cool"])
+        u = float(args["u_cool_in"])
+        A_cs = float(args["A_cool_cs"])
+
+        Dh = float(args["D_channel"])
+        L = float(args["L_channel"])
+
+        efficiency = float(args.get("pump_efficiency", 0.35))
+
+
+    elif fluid_cool == "air":
+
+        rho = float(args["rho_cool"])
+        mu = float(args["mu_cool"])
+        u = float(args["u_cool_in"])
+        A_cs = float(args["A_cool_cs"])
+
+        Dh = float(args["D_bat"])
+        L = float(args["L_channel"])
+
+        efficiency = float(args.get("fan_efficiency", 0.35))
+
+
+    else:
+        raise ValueError("fluid_cool should be air or water")
+
+
+    Re = rho * u * Dh / mu
+
+    f = cal_friction_factor(Re)
+
+    dynamic_pressure = 0.5 * rho * u ** 2
+
+    delta_p_major = f * (L / Dh) * dynamic_pressure
+
+    delta_p_minor = K_minor * dynamic_pressure
+
+    delta_p = delta_p_major + delta_p_minor
+
+    V_dot = u * A_cs
+
+    P_aux_W = delta_p * V_dot / efficiency
+
+    E_aux_J = P_aux_W * operation_time
+
+
+    return {
+        "Re": Re,
+        "P_aux_W": P_aux_W,
+        "E_aux_J": E_aux_J,
+    }
+# Calculate the total mass of the liquid-cooling BTMS, including the cold plate, coolant, pump, and pipes.
+# N_c is used to scale the coolant volume to the full module.
+# Calculate the total mass of BTMS according to cooling type.
+def cal_btms_mass(args):
+
+    fluid_cool = str(args["fluid_cool"]).lower()
+
+
+    # ==========================================================
+    # Air cooling BTMS
+    # ==========================================================
+    if fluid_cool == "air":
+
+        m_fan = float(args.get("m_fan", 0.0))
+
+        m_BTMS_kg = m_fan
+
+
+    # ==========================================================
+    # Liquid cooling BTMS
+    # ==========================================================
+    elif fluid_cool == "water":
+
+        # Coolant properties
+        rho_cool = float(args["rho_cool"])
+
+        # Cooling channel geometry
+        A_cool_cs = float(args["A_cool_cs"])
+        L_channel = float(args["L_channel"])
+
+        # Heat transfer area
+        A_HT_seg = float(args["A_HT_seg"])
+        num_seg = int(args["num_seg"])
+
+        # Scaling factor
+        cell_domain_factor = float(args["cell_domain_factor"])
+
+        # Cold plate properties
+        rho_plate = float(args["rho_plate"])
+        plate_thickness = float(args["plate_thickness"])
+
+        # Additional components
+        m_pump = float(args.get("m_pump", 0.0))
+        m_pipe = float(args.get("m_pipe", 0.0))
+
+
+        # Cold plate mass
+        A_plate = (
+            A_HT_seg* num_seg* cell_domain_factor
+        )
+
+        m_plate = (
+            rho_plate* A_plate* plate_thickness
+        )
+
+
+        # Coolant mass inside channel
+        m_coolant = (
+            rho_cool* A_cool_cs* L_channel
+        )
+
+
+        # Total liquid cooling BTMS mass
+        m_BTMS_kg = (
+            m_plate+ m_coolant+ m_pump+ m_pipe
+        )
+
+
+    else:
+
+        raise ValueError(
+            f"Unsupported cooling type: {fluid_cool}. "
+            "Only 'air' and 'water' are supported."
+        )
+
+
+    return m_BTMS_kg
