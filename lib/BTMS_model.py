@@ -315,11 +315,12 @@ def solve_coolant_temperature_distribution(args, tol=1e-6, maxiter=1000, debug=F
 # Auxiliary power and BTMS mass estimation
 # =============================================================================
 # Note:
-# The auxiliary power and BTMS mass calculated here are for a single
-# representative cooling channel/domain only.
-# Full-module scaling is not included in these functions.
-# =============================================================================
-# Calculate the Darcy friction factor based on the Reynolds number. 
+# For liquid cooling, the auxiliary power and BTMS mass are calculated
+# for the complete liquid-cooling system.
+#
+# The hydraulic pressure drop is evaluated using the flow conditions
+# in one representative parallel channel, while pump power is calculated
+# using the total coolant flow rate through all parallel channels.
 def cal_friction_factor(Re):
     Re = float(Re)
 
@@ -338,30 +339,92 @@ def cal_friction_factor(Re):
 
     return f_laminar + weight * (f_turbulent - f_laminar)
 
+
 # Calculate BTMS auxiliary power and energy consumption.
-# Water cooling: pump power
-# Air cooling: fan power
+# Water cooling: total pump power of the complete liquid-cooling system.
+# Air cooling: fan power for the supplied airflow domain.
 def cal_btms_aux_power(args):
 
     fluid_cool = str(args["fluid_cool"]).lower()
 
-    operation_time = float(args.get("operation_time", 0.0))
-    K_minor = float(args.get("K_minor", 0.0))
+    operation_time = float(
+        args.get("operation_time", 0.0)
+    )
 
+    K_minor = float(
+        args.get("K_minor", 0.0)
+    )
 
+    # ==========================================================
+    # Liquid cooling
+    # ==========================================================
     if fluid_cool == "water":
 
         rho = float(args["rho_cool"])
         mu = float(args["mu_cool"])
-        u = float(args["u_cool_in"])
+
+        # Cross-sectional area of one cooling channel.
         A_cs = float(args["A_cool_cs"])
 
         Dh = float(args["D_channel"])
         L = float(args["L_channel"])
 
-        efficiency = float(args.get("pump_efficiency", 0.35))
+        # Total mass flow rate supplied to all parallel channels.
+        m_dot_total = float(args["m_dot_total"])
 
+        # Number of parallel cooling channels.
+        num_channel = int(
+            args.get(
+                "num_channel",
+                args.get("num_channels")
+            )
+        )
 
+        efficiency = float(
+            args.get("pump_efficiency", 0.35)
+        )
+
+        if m_dot_total <= 0:
+            raise ValueError(
+                "m_dot_total must be positive."
+            )
+
+        if num_channel <= 0:
+            raise ValueError(
+                "num_channel must be positive."
+            )
+
+        if A_cs <= 0:
+            raise ValueError(
+                "A_cool_cs must be positive."
+            )
+
+        if efficiency <= 0:
+            raise ValueError(
+                "pump_efficiency must be positive."
+            )
+
+        # Mass flow rate through one parallel channel.
+        m_dot_channel = (
+            m_dot_total
+            / num_channel
+        )
+
+        # Mean velocity through one parallel channel.
+        u = (
+            m_dot_channel
+            / (rho * A_cs)
+        )
+
+        # Total volume flow rate of the complete system.
+        V_dot_total = (
+            m_dot_total
+            / rho
+        )
+
+    # ==========================================================
+    # Air cooling
+    # ==========================================================
     elif fluid_cool == "air":
 
         rho = float(args["rho_cool"])
@@ -372,44 +435,119 @@ def cal_btms_aux_power(args):
         Dh = float(args["D_bat"])
         L = float(args["L_channel"])
 
-        efficiency = float(args.get("fan_efficiency", 0.35))
+        efficiency = float(
+            args.get("fan_efficiency", 0.35)
+        )
 
+        if A_cs <= 0:
+            raise ValueError(
+                "A_cool_cs must be positive."
+            )
+
+        if efficiency <= 0:
+            raise ValueError(
+                "fan_efficiency must be positive."
+            )
+
+        # Volume flow rate through the supplied air domain.
+        V_dot_total = u * A_cs
+
+        m_dot_total = (
+            rho * V_dot_total
+        )
+
+        m_dot_channel = m_dot_total
+        num_channel = 1
 
     else:
-        raise ValueError("fluid_cool should be air or water")
 
+        raise ValueError(
+            "fluid_cool should be air or water"
+        )
 
+    if rho <= 0:
+        raise ValueError(
+            "rho_cool must be positive."
+        )
+
+    if mu <= 0:
+        raise ValueError(
+            "mu_cool must be positive."
+        )
+
+    if Dh <= 0:
+        raise ValueError(
+            "Hydraulic diameter must be positive."
+        )
+
+    if L <= 0:
+        raise ValueError(
+            "L_channel must be positive."
+        )
+
+    # Reynolds number and pressure drop are calculated from
+    # the flow conditions in one representative channel.
     Re = rho * u * Dh / mu
 
     f = cal_friction_factor(Re)
 
-    dynamic_pressure = 0.5 * rho * u ** 2
+    dynamic_pressure = (
+        0.5
+        * rho
+        * u ** 2
+    )
 
-    delta_p_major = f * (L / Dh) * dynamic_pressure
+    delta_p_major = (
+        f
+        * (L / Dh)
+        * dynamic_pressure
+    )
 
-    delta_p_minor = K_minor * dynamic_pressure
+    delta_p_minor = (
+        K_minor
+        * dynamic_pressure
+    )
 
-    delta_p = delta_p_major + delta_p_minor
+    delta_p = (
+        delta_p_major
+        + delta_p_minor
+    )
 
-    V_dot = u * A_cs
+    # All parallel channels experience the same pressure drop.
+    # Total pump/fan power uses the complete-system volume flow rate.
+    P_aux_W = (
+        delta_p
+        * V_dot_total
+        / efficiency
+    )
 
-    P_aux_W = delta_p * V_dot / efficiency
-
-    E_aux_J = P_aux_W * operation_time
-
+    E_aux_J = (
+        P_aux_W
+        * operation_time
+    )
 
     return {
         "Re": Re,
+        "friction_factor": f,
+        "u_cool_in_m_s": u,
+        "delta_p_major_Pa": delta_p_major,
+        "delta_p_minor_Pa": delta_p_minor,
+        "delta_p_Pa": delta_p,
+        "m_dot_total_kg_s": m_dot_total,
+        "m_dot_channel_kg_s": m_dot_channel,
+        "V_dot_total_m3_s": V_dot_total,
+        "num_channel": num_channel,
         "P_aux_W": P_aux_W,
         "E_aux_J": E_aux_J,
     }
+
 # Calculate the total mass of the liquid-cooling BTMS, including the cold plate, coolant, pump, and pipes.
 # N_c is used to scale the coolant volume to the full module.
 # Calculate the total mass of BTMS according to cooling type.
 def cal_btms_mass(args):
 
     fluid_cool = str(args["fluid_cool"]).lower()
-
+    return_components = bool(args.get("return_components", False))
 
     # ==========================================================
     # Air cooling BTMS
@@ -417,58 +555,108 @@ def cal_btms_mass(args):
     if fluid_cool == "air":
 
         m_fan = float(args.get("m_fan", 0.0))
-
         m_BTMS_kg = m_fan
 
+        if return_components:
+            return {
+                "m_BTMS_kg": m_BTMS_kg,
+                "m_fan_kg": m_fan,
+            }
+
+        return m_BTMS_kg
 
     # ==========================================================
     # Liquid cooling BTMS
     # ==========================================================
     elif fluid_cool == "water":
 
-        # Coolant properties
         rho_cool = float(args["rho_cool"])
-
-        # Cooling channel geometry
+        rho_plate = float(args["rho_plate"])
+        S_T = float(args["S_T"])
+        D_bat = float(args["D_bat"])
+        N_c = int(args.get("N_c", 20))
+        D_channel = float(args["D_channel"])
         A_cool_cs = float(args["A_cool_cs"])
         L_channel = float(args["L_channel"])
 
-        # Heat transfer area
-        A_HT_seg = float(args["A_HT_seg"])
-        num_seg = int(args["num_seg"])
+        # Compatible with both parameter names
+        num_channel = int(
+            args.get(
+                "num_channel",
+                args.get("num_channels")
+            )
+        )
 
+        plate_extra_height = float(
+            args.get("plate_extra_height", 4.0e-3)
+        )
 
-
-        # Cold plate properties
-        rho_plate = float(args["rho_plate"])
-        plate_thickness = float(args["plate_thickness"])
-
-        # Additional components
         m_pump = float(args.get("m_pump", 0.0))
         m_pipe = float(args.get("m_pipe", 0.0))
 
-
-        # Cold plate mass
-        A_plate = (
-            A_HT_seg* num_seg
+        L_plate = (
+            (N_c - 1) * S_T
+            + D_bat
         )
+
+        H_plate = (
+            D_channel
+            + plate_extra_height
+        )
+
+        V_plate_original = (
+            L_plate
+            * H_plate
+            * L_channel
+        )
+
+        V_coolant_total = (
+            num_channel
+            * A_cool_cs
+            * L_channel
+        )
+
+        V_aluminium = (
+            V_plate_original
+            - V_coolant_total
+        )
+
+        if V_aluminium < 0:
+            raise ValueError(
+                "The coolant-channel volume exceeds the cold-plate volume."
+            )
 
         m_plate = (
-            rho_plate* A_plate* plate_thickness
+            rho_plate
+            * V_aluminium
         )
 
-
-        # Coolant mass inside channel
         m_coolant = (
-            rho_cool* A_cool_cs* L_channel
+            rho_cool
+            * V_coolant_total
         )
 
-
-        # Total liquid cooling BTMS mass
         m_BTMS_kg = (
-            m_plate+ m_coolant+ m_pump+ m_pipe
+            m_plate
+            + m_coolant
+            + m_pump
+            + m_pipe
         )
 
+        if return_components:
+            return {
+                "m_BTMS_kg": m_BTMS_kg,
+                "m_plate_kg": m_plate,
+                "m_coolant_kg": m_coolant,
+                "m_pump_kg": m_pump,
+                "m_pipe_kg": m_pipe,
+                "V_plate_original_m3": V_plate_original,
+                "V_coolant_total_m3": V_coolant_total,
+                "V_aluminium_m3": V_aluminium,
+                "num_channel": num_channel,
+            }
+
+        return m_BTMS_kg
 
     else:
 
@@ -476,6 +664,3 @@ def cal_btms_mass(args):
             f"Unsupported cooling type: {fluid_cool}. "
             "Only 'air' and 'water' are supported."
         )
-
-
-    return m_BTMS_kg
