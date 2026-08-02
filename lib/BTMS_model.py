@@ -119,6 +119,54 @@ def liquid_nusselt_number(Re, Pr, heating=True):
     return Nu_2300 + weight * (Nu_4000 - Nu_2300)
 
 
+def liquid_nusselt_number_rect_channel(W_channel, H_channel):
+    """
+    Nusselt number for fully developed laminar flow
+    in a rectangular liquid-cooling channel.
+
+    The Nusselt number is calculated from the rectangular-channel
+    aspect ratio:
+
+        beta = min(W_channel, H_channel)
+               / max(W_channel, H_channel)
+
+    Parameters
+    ----------
+    W_channel : float
+        Rectangular-channel width, m.
+    H_channel : float
+        Rectangular-channel height, m.
+
+    Returns
+    -------
+    float
+        Nusselt number.
+    """
+
+    W_channel = float(W_channel)
+    H_channel = float(H_channel)
+
+    if W_channel <= 0 or H_channel <= 0:
+        raise ValueError(
+            "W_channel and H_channel must be positive."
+        )
+
+    beta = (
+        min(W_channel, H_channel)
+        / max(W_channel, H_channel)
+    )
+
+    Nu = 8.235 * (
+        1.0
+        - 2.0421 * beta
+        + 3.0853 * beta**2
+        - 2.4765 * beta**3
+        + 1.0578 * beta**4
+        - 0.1861 * beta**5
+    )
+
+    return Nu
+
 # solve coolant temperture distribution using a 1D finite difference approach along the flow direction
 
 def cal_energy_balance(T_dist, args):  
@@ -340,9 +388,7 @@ def cal_friction_factor(Re):
     return f_laminar + weight * (f_turbulent - f_laminar)
 
 
-# Calculate BTMS auxiliary power and energy consumption.
-# Water cooling: total pump power of the complete liquid-cooling system.
-# Air cooling: fan power for the supplied airflow domain.
+
 def cal_btms_aux_power(args):
 
     fluid_cool = str(args["fluid_cool"]).lower()
@@ -364,11 +410,10 @@ def cal_btms_aux_power(args):
         mu = float(args["mu_cool"])
 
         # Cross-sectional area of one cooling channel.
-        A_cs = float(args["A_cool_cs"])
-
+        A_cs = float(args["A_cool_cs"])        
         Dh = float(args["D_channel"])
         L = float(args["L_channel"])
-
+        
         # Total mass flow rate supplied to all parallel channels.
         m_dot_total = float(args["m_dot_total"])
 
@@ -383,6 +428,7 @@ def cal_btms_aux_power(args):
         efficiency = float(
             args.get("pump_efficiency", 0.35)
         )
+
 
         if m_dot_total <= 0:
             raise ValueError(
@@ -541,6 +587,7 @@ def cal_btms_aux_power(args):
         "E_aux_J": E_aux_J,
     }
 
+
 # Calculate the total mass of the liquid-cooling BTMS, including the cold plate, coolant, pump, and pipes.
 # N_c is used to scale the coolant volume to the full module.
 # Calculate the total mass of BTMS according to cooling type.
@@ -579,6 +626,8 @@ def cal_btms_mass(args):
         A_cool_cs = float(args["A_cool_cs"])
         L_channel = float(args["L_channel"])
 
+        H_plate = float(args.get("H_channel", 0.0))  # Use H_channel as the height of the cold plate, if provided; otherwise, default to 0.0
+
         # Compatible with both parameter names
         num_channel = int(
             args.get(
@@ -588,7 +637,7 @@ def cal_btms_mass(args):
         )
 
         plate_extra_height = float(
-            args.get("plate_extra_height", 4.0e-3)
+            args.get("plate_extra_height", 2.0e-3)
         )
 
         m_pump = float(args.get("m_pump", 0.0))
@@ -597,11 +646,6 @@ def cal_btms_mass(args):
         L_plate = (
             (N_c - 1) * S_T
             + D_bat
-        )
-
-        H_plate = (
-            D_channel
-            + plate_extra_height
         )
 
         V_plate_original = (
