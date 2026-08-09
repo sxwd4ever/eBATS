@@ -582,7 +582,7 @@ def cal_btms_mass(args):
         rho_plate = float(args["rho_plate"])
 
         L_channel = float(args["L_channel"])
-        L_plate = float(args["L_plate"])
+        W_plate = float(args["W_plate"])
 
         A_cool_cs = float(args["A_cool_cs"])
         H_channel = float(args["H_channel"])
@@ -597,7 +597,7 @@ def cal_btms_mass(args):
         H_plate = H_channel + H_bottom
 
         # Total external volume of the cold plate.
-        V_plate_original = L_plate * L_channel * H_plate
+        V_plate_original = W_plate * L_channel * H_plate
 
         # Total coolant volume inside all parallel channels.
         V_coolant_total = num_channel * A_cool_cs * L_channel
@@ -620,7 +620,7 @@ def cal_btms_mass(args):
                 "m_pump_kg": m_pump,
                 "m_pipe_kg": m_pipe,
                 "L_channel_m": L_channel,
-                "L_plate_m": L_plate,
+                "W_plate_m": W_plate,
                 "H_channel_m": H_channel,
                 "H_bottom_m": H_bottom,
                 "H_plate_m": H_plate,
