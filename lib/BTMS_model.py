@@ -272,7 +272,7 @@ def cal_power_residual(T_dist, args):
 
     num_seg = args.get("num_seg")
     num_cell_seg = args.get("num_cell_seg", 1.0)
-    
+    cal_residual = args.get("cal_residual", False)    
 
     Q_gen = args.get("Q_gen") * num_cell_seg * np.ones(num_seg) # assuming constant power generation for simplicity; adjust as needed
 
@@ -284,15 +284,18 @@ def cal_power_residual(T_dist, args):
     res_cool = Q_cool_HT - Q_cool_change
     
     # residual = np.zeros(num_seg)
-    # residual = res_bat**2 + res_cool**2 
-    # The solver is too stiff. It is better to replace it with the one below
-    # return residual
-    
-    
+    # **IMPORTANT** - 2026-09-08
+    # Use this one instead. The following that let least_squares handle the squaring internally would result in a prediction error in T_min
+    # To comply with other cases, I add a sum_residual flag to control whether to return the sum of squared residuals or the raw residuals.
+    if(cal_residual):
+        residual = res_bat**2 + res_cool**2 
+        # The solver is too stiff. It is better to replace it with the one below
+        return residual
+        
     # Return raw residuals. least_squares will square them internally.
     return np.concatenate((res_bat, res_cool))
 
-def solve_coolant_temperature_distribution(args, tol=1e-6, maxiter=1000, debug=False):
+def solve_coolant_temperature_distribution(args, cal_residual = False, tol=1e-6, maxiter=1000, debug=False):
     
     T_bat_pre = args.get("T_bat_pre")
     num_seg = len(T_bat_pre)    
@@ -303,6 +306,7 @@ def solve_coolant_temperature_distribution(args, tol=1e-6, maxiter=1000, debug=F
     m_bat = args.get("m_bat")
     cp_bat = args.get("cp_bat") 
     args["debug"] = debug
+    args["cal_residual"] = cal_residual    
 
     # Non-cooling period:
     # Do not solve coolant temperature distribution with least_squares.
