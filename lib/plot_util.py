@@ -1,3 +1,4 @@
+from matplotlib.colors import LinearSegmentedColormap
 from scipy.interpolate import interp1d
 import numpy as np
 
@@ -46,3 +47,16 @@ def find_curve_intersection(
     intersections = x_vals[np.isclose(y_diff, 0, atol=atol)]
 
     return intersections[0] if len(intersections) > 0 else None
+
+def draw_plot_bg_gradient(ax_cur, x0, x1, y0, y1):
+    ax_cur.imshow(
+    np.linspace(0.3, 0.6, 256)[:, None],
+    aspect='auto',
+    cmap=LinearSegmentedColormap.from_list(
+        "panel_grad",
+        ["#f6b4b4", "#f2f2f2", "#a9c9ee"]
+    ),
+    extent=[x0, x1, y0, y1],
+    alpha=0.5,
+    zorder=0
+)
