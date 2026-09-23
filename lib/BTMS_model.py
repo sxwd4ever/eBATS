@@ -658,7 +658,7 @@ def cal_air_fan_supplement_power(args):
     ST_over_D = 1.25
     chi = 1.0
 
-    V_air_out = float(args.get("V_air_out", V_air_in))
+
 
     # Park staggered-cell geometry
     S_T = ST_over_D * D_bat
@@ -674,11 +674,8 @@ def cal_air_fan_supplement_power(args):
     dynamic_pressure_max = 0.5 * rho_air * V_max**2
     delta_p_battery = N_c * f_park * chi * dynamic_pressure_max
 
-    # Unrecovered outlet kinetic pressure
-    delta_p_unrecovered = 0.5 * rho_air * V_air_out**2
-
-    # Total required pressure rise
-    delta_p_required = delta_p_battery + delta_p_unrecovered
+ 
+    delta_p_required = delta_p_battery
 
     # Available ram-air pressure
     delta_p_ram = C_rec * 0.5 * rho_air * V_x**2
@@ -700,7 +697,7 @@ def cal_air_fan_supplement_power(args):
 
     return {
         "V_air_in_m_s": V_air_in,
-        "V_air_out_m_s": V_air_out,
+
         "V_x_m_s": V_x,
         "V_max_m_s": V_max,
         "S_T_m": S_T,
@@ -708,7 +705,7 @@ def cal_air_fan_supplement_power(args):
         "Re_D": Re_D,
         "friction_factor_park": f_park,
         "delta_p_battery_Pa": delta_p_battery,
-        "delta_p_unrecovered_Pa": delta_p_unrecovered,
+
         "delta_p_required_Pa": delta_p_required,
         "delta_p_ram_Pa": delta_p_ram,
         "delta_p_fan_Pa": delta_p_fan,
