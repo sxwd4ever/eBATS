@@ -714,3 +714,63 @@ def cal_air_fan_supplement_power(args):
         "V_x_critical_m_s": V_x_critical,
         "fan_required": fan_required,
     }
+
+def cal_air_bottom_plate_mass(D_bat, s_gap, N_c, N_r, t_plate=2.0e-3, rho_plate=2700.0):
+    """
+    Calculate only the bottom-plate mass of the air-cooled battery module.
+
+    This function calculates the mass of the aluminium bottom support plate only.
+    It does not include the mass of the fan, cell holders, enclosure, ducts,
+    wiring, fasteners, or other air-cooling-system components.
+
+    The battery-cell spacing is simplified as:
+
+        S_D = S_T = S_L = D_bat + s_gap
+
+    where:
+        S_D : diagonal cell pitch, m
+        S_T : transverse cell pitch, m
+        S_L : longitudinal cell pitch, m
+
+    The bottom plate is assumed to exactly cover the footprint of the complete
+    battery-cell array.
+
+    Parameters
+    ----------
+    D_bat : float
+        Battery-cell diameter, m.
+    s_gap : float
+        Surface-to-surface spacing between adjacent battery cells, m.
+    N_c : int
+        Number of battery cells along the airflow direction.
+    N_r : int
+        Number of battery cells in the transverse direction.
+    t_plate : float, optional
+        Bottom-plate thickness, m. Default is 2 mm.
+    rho_plate : float, optional
+        Bottom-plate material density, kg/m3. Default is 2700 kg/m3 for aluminium.
+
+    Returns
+    -------
+    float
+        Bottom-plate mass, kg.
+    """
+
+    D_bat = float(D_bat)
+    s_gap = float(s_gap)
+    N_c = int(N_c)
+    N_r = int(N_r)
+    t_plate = float(t_plate)
+    rho_plate = float(rho_plate)
+
+    S_D = D_bat + s_gap
+    S_T = D_bat + s_gap
+    S_L = D_bat + s_gap
+
+    L_plate = D_bat + (N_c - 1) * S_L
+    W_plate = D_bat + (N_r - 1) * S_T
+
+    V_plate = L_plate * W_plate * t_plate
+    m_plate = rho_plate * V_plate
+
+    return m_plate
