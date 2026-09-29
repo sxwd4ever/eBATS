@@ -642,3 +642,135 @@ def cal_btms_mass(args):
             f"Unsupported cooling type: {fluid_cool}. "
             "Only 'air' and 'water' are supported."
         )
+
+def cal_air_fan_supplement_power(args):
+
+    rho_air = float(args["rho_air"])
+    mu_air = float(args["mu_air"])
+    V_air_in = float(args["V_air_in"])
+    V_x = float(args["V_x"])
+    D_bat = float(args["D_bat"])
+    N_c = int(args["N_c"])
+    A_in = float(args["A_in"])
+    fan_efficiency = float(args["fan_efficiency"])
+
+    C_rec = 0.30
+    ST_over_D = 1.25
+    chi = 1.0
+
+
+
+    # Park staggered-cell geometry
+    S_T = ST_over_D * D_bat
+    V_max = S_T / (S_T - D_bat) * V_air_in
+
+    # Reynolds number
+    Re_D = rho_air * V_max * D_bat / mu_air
+
+    # Park friction factor for S_T / D = 1.25
+    f_park = 265.4245 * Re_D ** (-1.0482) + 0.0807
+
+    # Battery-array pressure drop
+    dynamic_pressure_max = 0.5 * rho_air * V_max**2
+    delta_p_battery = N_c * f_park * chi * dynamic_pressure_max
+
+ 
+    delta_p_required = delta_p_battery
+
+    # Available ram-air pressure
+    delta_p_ram = C_rec * 0.5 * rho_air * V_x**2
+
+    # Fan supplementary pressure rise
+    delta_p_fan = max(0.0, delta_p_required - delta_p_ram)
+
+    # Full-module volumetric airflow rate
+    V_dot_air = A_in * V_air_in
+
+    # Supplementary fan power
+    P_fan_W = delta_p_fan * V_dot_air / fan_efficiency
+
+    # Critical horizontal velocity
+    V_x_critical = np.sqrt(2.0 * delta_p_required / (C_rec * rho_air))
+
+    # Fan operating state
+    fan_required = delta_p_fan > 0.0
+
+    return {
+        "V_air_in_m_s": V_air_in,
+
+        "V_x_m_s": V_x,
+        "V_max_m_s": V_max,
+        "S_T_m": S_T,
+        "ST_over_D": ST_over_D,
+        "Re_D": Re_D,
+        "friction_factor_park": f_park,
+        "delta_p_battery_Pa": delta_p_battery,
+
+        "delta_p_required_Pa": delta_p_required,
+        "delta_p_ram_Pa": delta_p_ram,
+        "delta_p_fan_Pa": delta_p_fan,
+        "V_dot_air_m3_s": V_dot_air,
+        "P_fan_W": P_fan_W,
+        "V_x_critical_m_s": V_x_critical,
+        "fan_required": fan_required,
+    }
+
+def cal_air_bottom_plate_mass(D_bat, s_gap, N_c, N_r, t_plate=2.0e-3, rho_plate=2700.0):
+    """
+    Calculate only the bottom-plate mass of the air-cooled battery module.
+
+    This function calculates the mass of the aluminium bottom support plate only.
+    It does not include the mass of the fan, cell holders, enclosure, ducts,
+    wiring, fasteners, or other air-cooling-system components.
+
+    The battery-cell spacing is simplified as:
+
+        S_D = S_T = S_L = D_bat + s_gap
+
+    where:
+        S_D : diagonal cell pitch, m
+        S_T : transverse cell pitch, m
+        S_L : longitudinal cell pitch, m
+
+    The bottom plate is assumed to exactly cover the footprint of the complete
+    battery-cell array.
+
+    Parameters
+    ----------
+    D_bat : float
+        Battery-cell diameter, m.
+    s_gap : float
+        Surface-to-surface spacing between adjacent battery cells, m.
+    N_c : int
+        Number of battery cells along the airflow direction.
+    N_r : int
+        Number of battery cells in the transverse direction.
+    t_plate : float, optional
+        Bottom-plate thickness, m. Default is 2 mm.
+    rho_plate : float, optional
+        Bottom-plate material density, kg/m3. Default is 2700 kg/m3 for aluminium.
+
+    Returns
+    -------
+    float
+        Bottom-plate mass, kg.
+    """
+
+    D_bat = float(D_bat)
+    s_gap = float(s_gap)
+    N_c = int(N_c)
+    N_r = int(N_r)
+    t_plate = float(t_plate)
+    rho_plate = float(rho_plate)
+
+    S_D = D_bat + s_gap
+    S_T = D_bat + s_gap
+    S_L = D_bat + s_gap
+
+    L_plate = D_bat + (N_c - 1) * S_L
+    W_plate = D_bat + (N_r - 1) * S_T
+
+    V_plate = L_plate * W_plate * t_plate
+    m_plate = rho_plate * V_plate
+
+    return m_plate
