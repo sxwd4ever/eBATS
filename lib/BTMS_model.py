@@ -441,6 +441,7 @@ def cal_friction_factor_rect_channel(Re,W_channel,H_channel,):
 
 
 
+
 def cal_btms_aux_power(args, friction_factor=None):
     """
     Calculate BTMS auxiliary power and energy consumption.
@@ -774,3 +775,180 @@ def cal_air_bottom_plate_mass(D_bat, s_gap, N_c, N_r, t_plate=2.0e-3, rho_plate=
     m_plate = rho_plate * V_plate
 
     return m_plate
+
+# =============================================================================
+# Air-cooled PCM thermal model
+# =============================================================================
+
+
+def pcm_effective_cp(T_pcm, cp_pcm, L_pcm, T_melt_start, T_melt_end):
+    """Return CE apparent specific heat in J/(kg K); temperatures are in degC."""
+    T_pcm = np.asarray(T_pcm, dtype=float)
+    cp_pcm_phase_change = cp_pcm + L_pcm / (T_melt_end - T_melt_start)
+    return np.where(
+        (T_pcm >= T_melt_start) & (T_pcm <= T_melt_end),
+        cp_pcm_phase_change,
+        cp_pcm,
+    )
+
+
+
+
+def cal_pcm_energy_balance(T_dist, args):
+    """Calculate one-step energy transfers and storage changes in J.
+
+    State order: [T_cool[0:N], T_pcm[0:N], T_bat[0:N]]. Temperatures: degC.
+    One battery node, one PCM node and one air segment represent each position.
+    Air heating is quasi-steady advection; battery and PCM storage are transient.
+
+    Required thermal inputs:
+      dt [s], T_bat_pre, T_pcm_pre, m_bat and m_pcm [kg per cell],
+      cp_bat and cp_pcm [J/(kg K)], L_pcm [J/kg],
+      T_melt_start, T_melt_end [degC], R_bat_pcm [K/W per cell].
+    num_cell_seg is the number of equivalent parallel cells per segment.
+    Active air cooling additionally uses T_cool_in [degC], u_cool_in [m/s],
+      A_cool_cs [m2], rho_cool [kg/m3], cp_cool [J/(kg K)],
+      htc_cool [W/(m2 K)] and A_HT_seg [m2, TOTAL exposed PCM area per segment].
+    Scalar or length-N segment properties are accepted through broadcasting.
+    PCM material parameters and the phase-change interval describe one material.
+
+    Heat path: battery -> R_bat_pcm -> PCM node -> external air convection.
+    No cold plate, aluminum shell, direct battery-air path, axial PCM conduction,
+    or internal melt flow is included. R_bat_pcm is supplied by the case model.
+    is_cool=False disables heat removal but retains battery-PCM exchange.
+    """
+    T_cool, T_pcm, T_bat = np.split(np.asarray(T_dist, dtype=float), 3)
+    dt = args['dt']
+    num_cell_seg = np.asarray(args.get('num_cell_seg', 1.0), dtype=float)
+
+    # Convert per-cell masses and thermal resistance to segment quantities.
+    m_bat_seg = np.asarray(args['m_bat'], dtype=float) * num_cell_seg
+    m_pcm_seg = np.asarray(args['m_pcm'], dtype=float) * num_cell_seg
+    R_bat_pcm_seg = np.asarray(args['R_bat_pcm'], dtype=float) / num_cell_seg
+
+    Qdot_bat_pcm = (T_bat - T_pcm) / R_bat_pcm_seg
+    Qdot_pcm_air = np.zeros_like(T_pcm)
+    Qdot_air_advection = np.zeros_like(T_cool)
+
+    if args.get('is_cool', True):
+        T_air_upstream = np.concatenate(([args['T_cool_in']], T_cool[:-1]))
+        if args.get('upwind_scheme', False):
+            T_air_exchange = T_air_upstream
+        else:
+            T_air_exchange = 0.5 * (T_air_upstream + T_cool)
+
+        # Convection acts on the exposed outer PCM surface.
+        htc_cool = np.asarray(args['htc_cool'], dtype=float)
+        A_pcm_air_seg = np.asarray(args['A_HT_seg'], dtype=float)
+        Qdot_pcm_air = htc_cool * A_pcm_air_seg * (T_pcm - T_air_exchange)
+
+        # Use the actual inlet velocity for mass flow, not the local gap velocity.
+        m_dot_air = args['rho_cool'] * args['u_cool_in'] * args['A_cool_cs']
+        Qdot_air_advection = m_dot_air * args['cp_cool'] * (T_cool - T_air_upstream)
+
+    # Integrate the rectangular apparent heat capacity over this temperature step.
+    T_pcm_pre = np.asarray(args['T_pcm_pre'], dtype=float)
+    T_start = args['T_melt_start']
+    width = args['T_melt_end'] - T_start
+    phase_change_dT = (
+        np.clip(T_pcm - T_start, 0.0, width)
+        - np.clip(T_pcm_pre - T_start, 0.0, width)
+    )
+    Q_pcm = m_pcm_seg * (
+        args['cp_pcm'] * (T_pcm - T_pcm_pre)
+        + args['L_pcm'] / width * phase_change_dT
+    )
+    Q_bat = m_bat_seg * args['cp_bat'] * (
+        T_bat - np.asarray(args['T_bat_pre'], dtype=float)
+    )
+
+    return (
+        Qdot_bat_pcm * dt,
+        Qdot_pcm_air * dt,
+        Qdot_air_advection * dt,
+        Q_pcm,
+        Q_bat,
+    )
+
+
+def cal_pcm_power_residual(T_dist, args):
+    """Return raw battery, PCM and air balance residuals in W.
+
+    Q_gen is heat generation in W PER CELL (scalar or length-N array).
+    least_squares performs the residual squaring internally.
+    """
+    Q_bat_pcm, Q_pcm_air, Q_air_advection, Q_pcm, Q_bat = (
+        cal_pcm_energy_balance(T_dist, args)
+    )
+    Q_gen = (
+        np.asarray(args['Q_gen'], dtype=float)
+        * np.asarray(args.get('num_cell_seg', 1.0), dtype=float)
+        * args['dt']
+    )
+
+    res_bat = Q_gen - Q_bat - Q_bat_pcm
+    res_pcm = Q_bat_pcm - Q_pcm - Q_pcm_air
+    res_air = Q_pcm_air - Q_air_advection
+
+    return np.concatenate((res_bat, res_pcm, res_air)) / args['dt']
+
+
+def solve_coolant_pcm_temperature_distribution(args, tol=1e-6, maxiter=1000, debug=False):
+
+    T_bat_pre = args.get("T_bat_pre")
+    T_pcm_pre = args.get("T_pcm_pre")
+    num_seg = len(T_bat_pre)
+    T_cool_in = args.get("T_cool_in")
+    is_cool = args.get("is_cool")
+    args["debug"] = debug
+
+    T_cool_out = args.get("T_cool_out")
+    T_cool_pre = args.get("T_cool_pre")
+
+    # Use previous time-step coolant temperature as the initial guess.
+    # If it is unavailable or invalid, fall back to the original linear guess.
+    if not is_cool:
+        T_cool = np.ones(num_seg) * T_cool_in
+    elif T_cool_pre is not None and np.all(np.isfinite(T_cool_pre)):
+        T_cool = copy.deepcopy(T_cool_pre)
+    else:
+        T_cool = np.linspace(T_cool_in, T_cool_out, num_seg + 1)[1:]
+
+    # Keep the initial guess within the lower bound.
+    if is_cool:
+        T_cool = np.maximum(T_cool, T_cool_in + 1e-8)
+
+    # Use previous PCM and battery temperatures as the initial guess.
+    T_pcm = copy.deepcopy(T_pcm_pre)
+    T_bat = copy.deepcopy(T_bat_pre)
+
+    T_dist = np.concatenate((T_cool, T_pcm, T_bat))
+
+    if debug:
+        print(f"Initial guess for {len(T_cool)} coolant temperatures along the flow path: {T_cool}")
+        print(f"Initial guess for {len(T_pcm)} PCM temperatures along the flow path: {T_pcm}")
+        print(f"Initial guess for {len(T_bat)} battery temperatures along the flow path: {T_bat}")
+
+    num_solutions = len(T_dist)
+
+    upper_bound = np.ones(num_solutions) * (T_cool_in + 300)
+    lower_bound = np.ones(num_solutions) * T_cool_in
+
+    res = opt.least_squares(
+        cal_pcm_power_residual,
+        T_dist,
+        args=([args]),
+        method='trf',
+        verbose=2 if debug else 0,
+        ftol=tol,
+        max_nfev=maxiter,
+        bounds=(lower_bound, upper_bound)
+    )
+
+    # output the battery, PCM and coolant temperature distribution for debugging
+    if debug:
+        print("Optimization success:", res.success)
+        print("Final residual:", res.fun)
+        print("Optimized coolant, PCM and battery temperatures:", res.x)
+
+    return res.x
